@@ -5,9 +5,11 @@
 
 # Conductor
 
-**Tell Claude what to automate. It handles the rest.**
+**Claude's hands for local automation — with a web dashboard for the humans who watch it.**
 
-Conductor is a local task orchestration platform that Claude controls directly. Install it, restart Claude Desktop, and Claude can create scheduled workers, build multi-step pipelines, send email reports, and monitor everything — all through conversation. No coding required.
+Conductor gives Claude direct, persistent control of a local task runner. Tell Claude what you want automated; it creates the scheduled workers, builds multi-step pipelines, wires up email reports, fires test runs, and reads back the logs when something fails — all through conversation. A web dashboard at `127.0.0.1:5000` runs alongside it for humans who want to peek at status, click pause, or hand-edit a worker.
+
+Originally built to automate warehouse reporting workflows (the daily ShipExec metrics pull) and now general-purpose: any Python / batch / shell script, any schedule, any chain.
 
 ![Conductor Dashboard](Readmejpegs/Screenshot%202026-04-01%20210159.png)
 
@@ -201,6 +203,28 @@ The debug log includes an **Analyze Errors** button. When ERROR entries are pres
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+**Example — before / after:**
+
+Raw error in the debug log:
+
+```
+[ERROR] worker "Daily Metrics Report" exit code 1
+Traceback (most recent call last):
+  File "C:\scripts\metrics.py", line 142, in <module>
+    driver.find_element(By.ID, "report-table").click()
+  File ".../selenium/.../webdriver.py", line 830, in find_element
+    raise NoSuchElementException(message)
+selenium.common.exceptions.NoSuchElementException: Message: no such element:
+Unable to locate element: {"method":"css selector","selector":"[id="report-table"]"}
+```
+
+Claude's diagnosis (one click later):
+
+> The script is failing on a `find_element` call before the page has finished loading — Selenium is racing the DOM. The element `#report-table` is rendered after an XHR completes. Two fixes, in order of preference:
+> 1. Wrap the lookup in a `WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "report-table")))` so it polls until the element exists.
+> 2. If you don't want to import the wait helpers, a `time.sleep(2)` before the click will work but is brittle.
+> The traceback shows this happened on the first run after a ShipExec UI change yesterday — they may have also renamed the element. Verify the ID is still `report-table` in DevTools before adding the wait.
 
 ## Email Setup
 

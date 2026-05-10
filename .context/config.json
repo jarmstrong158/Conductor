@@ -1,0 +1,6 @@
+{
+  "project_name": "Conductor",
+  "token_budget": 4000,
+  "max_entry_tokens": 1000,
+  "stale_threshold_days": 30
+}
