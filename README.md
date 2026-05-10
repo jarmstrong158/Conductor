@@ -11,6 +11,8 @@ Conductor gives Claude direct, persistent control of a local task runner. Tell C
 
 Originally built to automate warehouse reporting workflows (the daily ShipExec metrics pull) and now general-purpose: any Python / batch / shell script, any schedule, any chain.
 
+> **MCP layer lives here:** [conductor-mcp](https://github.com/jarmstrong158/conductor-mcp) — the thin server that exposes Conductor's REST API as Claude tools. It's bundled and auto-registered on install, so most users won't need to touch it directly.
+
 ![Conductor Dashboard](Readmejpegs/Screenshot%202026-04-01%20210159.png)
 
 ## Claude Integration
