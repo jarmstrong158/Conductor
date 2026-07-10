@@ -1,3 +1,275 @@
 {
-  "items": []
+  "items": [
+    {
+      "id": "k-95b73744",
+      "type": "memory",
+      "kind": "decision",
+      "content": "MCP server auto-launches Conductor.exe from AppData when not running",
+      "why": "",
+      "tags": [
+        "mcp",
+        "auto-launch",
+        "exe",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-001"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 12,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-f82ed540",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Deleted old Redis Operator exe and DB to prevent fork bomb from VM monitor worker",
+      "why": "",
+      "tags": [
+        "stability",
+        "fork-bomb",
+        "vm-monitor",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-002"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 12,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-64de5aff",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Removed auto-start registry entry \u2014 Conductor launches on demand via MCP or manual exe click",
+      "why": "",
+      "tags": [
+        "startup",
+        "registry",
+        "tabs",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-003"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 9,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-396cad4d",
+      "type": "memory",
+      "kind": "decision",
+      "content": "Conductor auto-launch uses tasklist process check + O_EXCL file lock to prevent race",
+      "why": "",
+      "tags": [
+        "mcp",
+        "auto-launch",
+        "locking",
+        "architecture",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "dec-004"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 9,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-fa84280b",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Never run Conductor from source (python launch.py). Always use the installed exe at %APPDATA%/Redis Operator/Conductor.exe",
+      "why": "Source and exe use different SQLite databases. Running from source creates/modifies a different conductor.db than the one the exe uses, causing workers to go missing or duplicate.",
+      "tags": [
+        "exe",
+        "database",
+        "deployment",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-001"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 15,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-2c3a8113",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "The AppData DB is the source of truth: C:/Users/jarms/AppData/Roaming/Redis Operator/conductor.db",
+      "why": "The exe reads from AppData. The repo has its own conductor.db which is stale. All MCP interactions go through the exe which uses the AppData DB.",
+      "tags": [
+        "database",
+        "appdata",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-002"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 15,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-86912f12",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Do not recreate the Cowork VM Monitor worker \u2014 it was deleted intentionally",
+      "why": "Worker #4 caused a fork bomb that exhausted system resources. The VM runs fine without monitoring.",
+      "tags": [
+        "vm-monitor",
+        "stability",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-003"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 6,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-afe24edf",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "Conductor's auto-launch logic must use both process detection (tasklist) and file locking. Never trust port-check alone.",
+      "why": "The exe takes several seconds to bind port 5000 after launching. A port-check alone races during that window and can spawn multiple Conductor instances. Multiple instances = multiple schedulers firing the same cron = cascading subprocess explosions.",
+      "tags": [
+        "mcp",
+        "auto-launch",
+        "race-condition",
+        "fork-bomb",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-004"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 15,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    },
+    {
+      "id": "k-13d4bdc4",
+      "type": "memory",
+      "kind": "constraint",
+      "content": "All subprocess-spawning scripts (SMTP, HTTP, etc.) must have explicit timeouts",
+      "why": "Without a timeout, a hung network call keeps the subprocess alive forever. When a scheduler fires repeatedly, dead subprocesses stack up and exhaust resources.",
+      "tags": [
+        "subprocess",
+        "timeout",
+        "fork-bomb",
+        "stability",
+        "context-keeper"
+      ],
+      "scope": "team",
+      "project": "Conductor",
+      "source": {
+        "system": "context-keeper",
+        "ref": "con-005"
+      },
+      "created_by": "jonny-desktop",
+      "created_at": "2026-07-10T17:59:26.286846+00:00",
+      "updated_at": "2026-07-10T18:00:34.308620+00:00",
+      "status": "active",
+      "trust": {
+        "recalls": 6,
+        "endorsements": [],
+        "projects": [
+          "Conductor"
+        ]
+      }
+    }
+  ]
 }
