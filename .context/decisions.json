@@ -130,5 +130,49 @@
     "created_at": "2026-07-24T21:18:52.877405+00:00",
     "updated_at": "2026-07-24T21:18:52.877405+00:00",
     "verified_at": "2026-07-24T21:18:52.877405+00:00"
+  },
+  {
+    "id": "dec-006-d1e1",
+    "summary": "Removed Redis entirely (dependency, bundling, build step, README claim, UI badge) and dropped the orphaned SQLAlchemy dependency. Single-sourced the version in _version.py.",
+    "problem": "Redis was advertised in the README as the \"Worker State\" layer, bundled into the installer, downloaded at build time by download_redis.py, started at boot by start_redis(), and surfaced as a dashboard status badge and an MCP tool. It was never used: _redis_client was assigned at two sites and read at none - no .set/.get/.hset/.lpush/.publish call existed anywhere. _redis_running() was a raw TCP connect, not even a PING. All state has always been in SQLite. SQLAlchemy was likewise never imported, orphaned when 08aaff6 swapped APScheduler to the memory jobstore. Separately, three different version strings disagreed (app.py 4.0.0, pyproject 0.1.1, server.py 1.0.0) while the auto-updater compared GitHub releases against them.",
+    "why_chosen": "Both claims were verified by exhaustive grep across the repo before anything was deleted, since removing a genuinely-used dependency would be far worse than leaving dead code. Carrying Redis imposed real cost: a bundled binary in the installer, a build step that could fail the release, a spawned server process at every boot, a CI service container, and a README claim that misrepresented the architecture. The deprecated /api/redis-status route and get_redis_status MCP tool alias are retained deliberately so already-installed MCP clients and any user dashboards do not hard-fail on upgrade; they now report scheduler health. Version is single-sourced through _version.py with setuptools dynamic metadata so the three strings cannot drift apart again.",
+    "what_we_tried": "",
+    "tradeoffs": "Anything outside this repo that parsed the /api/redis-status payload now gets scheduler state under the same key name, which is a semantic change behind a stable field. The sdist version jumps 0.1.1 -> 4.0.0, which is correct but a large apparent leap for anyone tracking the PyPI-style metadata.",
+    "alternatives": [
+      {
+        "option": "Leave Redis in place as future-proofing for distributed workers",
+        "reason_rejected": "Speculative. It cost a bundled binary, a failable build step, a boot-time subprocess and a false README architecture claim, for zero current function. Re-adding it later is cheap if a real need appears."
+      },
+      {
+        "option": "Delete /api/redis-status and get_redis_status outright",
+        "reason_rejected": "Would hard-fail already-installed MCP clients and any user-side dashboard polling it. Kept as deprecated shims reporting scheduler health instead."
+      }
+    ],
+    "constraints_created": [
+      "State belongs in SQLite; do not reintroduce Redis without an actual read path"
+    ],
+    "related_to": [
+      "dec-005-a15e"
+    ],
+    "tags": [
+      "redis",
+      "dead-code",
+      "dependencies",
+      "versioning",
+      "audit"
+    ],
+    "retrieval_hints": [
+      "why was Redis removed from Conductor",
+      "is Redis used for worker state",
+      "version mismatch app.py pyproject server.py",
+      "_version.py single source of truth"
+    ],
+    "origin": "agent",
+    "schema_version": 4,
+    "status": "active",
+    "superseded_by": null,
+    "created_at": "2026-07-24T21:22:46.256400+00:00",
+    "updated_at": "2026-07-24T21:22:46.256400+00:00",
+    "verified_at": "2026-07-24T21:22:46.256400+00:00"
   }
 ]

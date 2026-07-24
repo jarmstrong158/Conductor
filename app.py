@@ -746,12 +746,14 @@ def get_db():
     """
     conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    # busy_timeout and synchronous are per-connection and must be set every time.
     conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    # journal_mode is persisted in the database file, so it only needs setting once.
     key = str(DB_PATH)
     if key not in _WAL_INITIALISED:
         try:
             conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
             _WAL_INITIALISED.add(key)
         except sqlite3.Error as e:
             logger.warning("Could not enable WAL on %s: %s", key, e)

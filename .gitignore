@@ -20,3 +20,4 @@ redis_bundled/
 dump.rdb
 templates/generated/
 .cambium/
+logs/
