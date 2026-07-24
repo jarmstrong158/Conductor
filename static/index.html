@@ -99,7 +99,7 @@
     gap: 16px;
   }
 
-  .redis-badge {
+  .status-badge {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -112,7 +112,7 @@
     color: var(--text2);
   }
 
-  .redis-dot {
+  .status-dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
@@ -120,8 +120,8 @@
     transition: all 0.3s;
   }
 
-  .redis-dot.up { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .redis-dot.down { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .status-dot.up { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.down { background: var(--red); box-shadow: 0 0 6px var(--red); }
 
   /* ---- Panel ---- */
   .panel {
@@ -606,8 +606,8 @@
   .toast.error { border-left: 3px solid var(--red); }
   .toast.info  { border-left: 3px solid var(--accent); }
 
-  /* ---- Redis error banner ---- */
-  #redis-error-banner {
+  /* ---- Error banner ---- */
+  #error-banner {
     display: none;
     background: rgba(255,64,96,0.08);
     border: 1px solid rgba(255,64,96,0.3);
@@ -621,7 +621,7 @@
     line-height: 1.6;
   }
 
-  #redis-error-banner.show { display: block; }
+  #error-banner.show { display: block; }
 
 
   /* ---- Responsive ---- */
@@ -873,9 +873,9 @@
         <span id="email-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--text3);margin-right:4px;"></span>📧 Email
       </button>
       <button class="btn btn-ghost btn-sm" onclick="openServiceModal()" title="Manage auto-start on login" style="font-size:12px;">⚙ Auto-start</button>
-      <div class="redis-badge">
-        <div class="redis-dot" id="redis-dot"></div>
-        <span id="redis-status-text">Checking...</span>
+      <div class="status-badge">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-text">Checking...</span>
       </div>
     </div>
   </header>
@@ -898,8 +898,8 @@
     </div>
   </div>
 
-  <!-- Redis error banner -->
-  <div id="redis-error-banner"></div>
+  <!-- Error banner -->
+  <div id="error-banner"></div>
 
   <!-- ═══════════════════════════════════════════════════════
        SECTION 1: Active Workers
@@ -1441,20 +1441,20 @@ async function checkForUpdate() {
   } catch(e) {}
 }
 
-// Redis status
+// Scheduler status
 // ═══════════════════════════════════════════════════════════════
-async function checkRedisStatus() {
+async function checkStatus() {
   try {
-    const r = await fetch('/api/redis-status');
+    const r = await fetch('/api/status');
     const d = await r.json();
-    const dot = document.getElementById('redis-dot');
-    const txt = document.getElementById('redis-status-text');
-    if (d.running) {
-      dot.className = 'redis-dot up';
-      txt.textContent = 'Redis running';
+    const dot = document.getElementById('status-dot');
+    const txt = document.getElementById('status-text');
+    if (d.scheduler) {
+      dot.className = 'status-dot up';
+      txt.textContent = 'Scheduler running';
     } else {
-      dot.className = 'redis-dot down';
-      txt.textContent = 'Redis offline';
+      dot.className = 'status-dot down';
+      txt.textContent = 'Scheduler stopped';
     }
   } catch(e) {}
 }
@@ -3288,14 +3288,14 @@ function init() {
   addWorkerCard();
   refreshGroups().then(() => refreshWorkers());
   refreshProfiles();
-  checkRedisStatus();
+  checkStatus();
   checkEmailSettings();
   checkForUpdate();
   pollLogs();
 
   setInterval(refreshWorkers, 4000);
   setInterval(refreshGroups, 15000);
-  setInterval(checkRedisStatus, 8000);
+  setInterval(checkStatus, 8000);
   setInterval(pollLogs, 3000);
 }
 

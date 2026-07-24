@@ -1,8 +1,18 @@
 # Conductor — Claude Context
 
-Conductor is a local web dashboard for managing scheduled Python and batch workers via Redis + APScheduler. It runs at http://127.0.0.1:5000 and exposes a REST API that this MCP server wraps.
+Conductor is a local web dashboard for managing scheduled Python and batch workers via APScheduler + SQLite. It runs at http://127.0.0.1:5000 and exposes a REST API that this MCP server wraps.
 
-The MCP server auto-launches the installed Conductor.exe from %APPDATA%/Redis Operator/ if it's not already running. Never run Conductor from source — always use the exe.
+The MCP server auto-launches the installed Conductor.exe from %APPDATA%/Redis Operator/ if it's not already running.
+
+**Redis is not used.** It was advertised and bundled but every piece of state lives in SQLite; the client was assigned and never read. Removed.
+
+**Running from source is supported** (`python launch.py`) and is how the test suite runs. The old "never run from source" rule was written when the frozen exe was assumed to be the only working mode — in fact it was the broken one (see below). The real caveat is only that source runs default to the repo's `conductor.db`, not the exe's AppData copy.
+
+## Running user scripts — do not use sys.executable
+
+`conductor.spec` freezes `launch.py`, so inside the exe `sys.executable` is `Conductor.exe`, **not** a Python. Building a worker command as `[sys.executable, task_path]` produced `Conductor.exe user_script.py`; `launch.py` ignores `sys.argv`, so it printed a banner, opened a browser tab and exited 0 — and Conductor recorded **success for a script that never ran**.
+
+Always resolve an interpreter with `_resolve_python()` and guard the command with `_assert_not_self()`. `_resolve_python()` checks `CONDUCTOR_PYTHON`, a bundled python, the `py` launcher, `PATH`, then the Windows registry, and raises `InterpreterNotFound` rather than ever returning the Conductor binary. Never silently succeed.
 
 ## What it does
 
@@ -76,7 +86,9 @@ Two systems:
 Each run writes a row to run_history: triggered_at, trigger_type (scheduled/manual), success (bool), duration_ms, error_msg. Last 10 runs available per worker/chain via API.
 
 ### Logs
-In-memory buffer, max 500 entries (oldest drop off). Levels: INFO, OK, FIRE, MANUAL, ERROR, PAUSE, DELETE. Clear in the dashboard only hides entries visually — does not delete from backend.
+Two layers:
+- **Dashboard buffer** — in-memory, max 500 entries (oldest drop off). Levels: INFO, OK, FIRE, MANUAL, ERROR, PAUSE, DELETE. Clear in the dashboard only hides entries visually — does not delete from backend.
+- **Rotating file log** — `logs/conductor.log` next to the app (2 MB x 5 backups), configured by `setup_logging()`. APScheduler's own logger is attached here too, so job exceptions, misfires and "maximum number of running instances reached" are captured. Previously APScheduler had no handler at all and those were lost.
 
 ## Known edge cases
 
@@ -112,12 +124,12 @@ Conductor has built-in email support. No wrapper scripts needed:
 All email features require global email settings configured first (📧 button in header). Gmail App Passwords require 2-Step Verification. Generate at https://myaccount.google.com/apppasswords.
 
 ### Common dependency issues
-If a script fails with `ModuleNotFoundError`, Conductor auto-retries once after pip-installing the missing module. But for `new_console: true` workers, the auto-install won't trigger (no stderr captured). Pre-install dependencies or use the `requirements` field on the worker.
+If a script fails with `ModuleNotFoundError`, Conductor can retry once after pip-installing the missing module — but that path is **off by default**. Scraping a package name out of a traceback and running an unpinned `pip install` unattended is a typosquat-by-typo vector, so it requires `CONDUCTOR_AUTO_PIP_INSTALL=1`. The `requirements` field on a worker is user-declared and always installs. Prefer `requirements`.
 
 ## When helping a user set up Conductor
 
 Walk through in this order:
-1. Confirm Conductor is running (check redis status, then list workers)
+1. Confirm Conductor is running (check status, then list workers)
 2. Ask what they want to automate — script path, what it does, when it should run
 3. If the script uses Selenium/browser/GUI, set `new_console: true`. Pre-install dependencies with the `requirements` field since auto-install won't work with `new_console`.
 4. Choose the right schedule type based on their description

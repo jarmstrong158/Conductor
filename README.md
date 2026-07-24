@@ -62,7 +62,6 @@ Conductor registers itself as an MCP server in Claude Desktop on first launch. A
 - **Auto-update Check** — modal dialog when a newer release is available.
 - **System Tray Icon** — right-click for Open Dashboard or Stop.
 - **AI Error Analysis** — send error logs to Claude for diagnosis directly in the dashboard.
-- **Redis Auto-Start** — bundled Redis, starts automatically. No separate install needed.
 - **Persistent State** — SQLite database. Workers and chains restore on restart.
 
 ### Add Workers Form
@@ -85,19 +84,24 @@ Conductor registers itself as an MCP server in Claude Desktop on first launch. A
 
 Download and run **`Conductor_Setup.exe`** from the [latest release](https://github.com/jarmstrong158/conductor/releases/latest).
 
-- No Python required — everything is bundled
-- Redis is bundled — no separate install needed
+- Requires Python 3 on the machine (see note below) — Conductor runs your `.py` workers with it
 - Installs to `%AppData%\Conductor` — no admin/UAC required
 - Adds Start Menu shortcut and optional desktop shortcut
 - Optional auto-start at login
 - Uninstaller included
+
+> **Python is required for Python workers.** Conductor itself ships as a self-contained
+> executable, but it runs your `.py` scripts with a real interpreter found on your system
+> (the `py` launcher, `PATH`, or the Windows registry). If none is found, workers fail
+> loudly with instructions — they are never reported as successful.
+> Set `CONDUCTOR_PYTHON` to a full path to pin a specific interpreter.
+> `.bat` / `.cmd` / `.sh` workers do not need Python.
 
 ## Setup from Source
 
 ### Requirements
 
 - Python 3.10+
-- Redis server (Windows: `winget install Redis.Redis` — macOS: `brew install redis` — Ubuntu: `sudo apt install redis-server`)
 
 ```bash
 git clone https://github.com/jarmstrong158/conductor.git
@@ -173,7 +177,7 @@ All generated scripts use Python stdlib only.
 ```
 conductor/
 ├── launch.py          # Entry point — Flask, browser, tray, MCP registration
-├── app.py             # Flask backend + APScheduler + SQLite + Redis
+├── app.py             # Flask backend + APScheduler + SQLite
 ├── server.py          # MCP server for Claude Desktop
 ├── CLAUDE.md          # Context file for Claude Code / Desktop
 ├── static/
@@ -193,8 +197,7 @@ conductor/
 |-------|-----------|
 | Backend | Python 3, Flask |
 | Scheduling | APScheduler (BackgroundScheduler + MemoryJobStore) |
-| Persistence | SQLite |
-| Worker State | Redis (port 6379, bundled on Windows) |
+| Persistence | SQLite (WAL mode) |
 | Frontend | Vanilla JS, single HTML file |
 | AI Integration | Claude via MCP (21 tools) + Anthropic API (error analysis) |
 
@@ -271,7 +274,7 @@ Once configured, all templates and worker notifications can send email.
 | `POST` | `/api/service/uninstall` | Remove auto-start |
 | `GET` | `/api/update-check` | Check for updates |
 | `GET` | `/api/logs?since=N` | Log entries |
-| `GET` | `/api/redis-status` | Redis status |
+| `GET` | `/api/status` | Scheduler + database status |
 | `GET` | `/api/browse?mode=file\|dir` | Native file picker |
 
 ## License

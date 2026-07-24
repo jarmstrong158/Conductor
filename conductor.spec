@@ -11,7 +11,6 @@ a = Analysis(
     datas=[
         ('static',        'static'),
         ('tasks',         'tasks'),
-        ('redis_bundled', 'redis_bundled'),
         ('server.py',     '.'),
         ('CLAUDE.md',     '.'),
     ],
@@ -39,16 +38,6 @@ a = Analysis(
         'apscheduler.events',
         'apscheduler.util',
         'six',
-
-        # Redis
-        'redis',
-        'redis.client',
-        'redis.connection',
-        'redis.exceptions',
-
-        # SQLAlchemy (APScheduler dependency)
-        'sqlalchemy',
-        'sqlalchemy.dialects.sqlite',
 
         # System tray
         'pystray',

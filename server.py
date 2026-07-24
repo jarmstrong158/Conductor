@@ -16,6 +16,12 @@ import urllib.request
 import urllib.error
 from typing import Any
 
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _version import __version__ as VERSION
+except ImportError:
+    VERSION = "0.0.0+unknown"
+
 BASE_URL = "http://127.0.0.1:5000"
 EXE_PATH = os.path.join(os.environ.get("APPDATA", ""), "Redis Operator", "Conductor.exe")
 LAUNCH_LOCK_PATH = os.path.join(tempfile.gettempdir(), "conductor_mcp_launch.lock")
@@ -328,8 +334,8 @@ TOOLS = [
         }
     },
     {
-        "name": "get_redis_status",
-        "description": "Check if Redis is running and connected on port 6379.",
+        "name": "get_status",
+        "description": "Check Conductor's scheduler and database status.",
         "inputSchema": {"type": "object", "properties": {}}
     },
     {
@@ -400,8 +406,9 @@ def handle_tool(name: str, args: dict) -> str:
     elif name == "get_logs":
         since = args.get("since", 0)
         return json.dumps(api("GET", f"/api/logs?since={since}"), indent=2)
-    elif name == "get_redis_status":
-        return json.dumps(api("GET", "/api/redis-status"), indent=2)
+    elif name in ("get_status", "get_redis_status"):
+        # get_redis_status kept as a deprecated alias; Conductor no longer uses Redis.
+        return json.dumps(api("GET", "/api/status"), indent=2)
     elif name == "check_for_update":
         return json.dumps(api("GET", "/api/update-check"), indent=2)
     elif name == "get_email_settings":
@@ -430,7 +437,7 @@ def main():
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "conductor-mcp", "version": "1.0.0"}
+                    "serverInfo": {"name": "conductor-mcp", "version": VERSION}
                 }
             }
         elif method == "tools/list":

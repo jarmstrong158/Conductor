@@ -25,7 +25,7 @@ if errorlevel 1 (
 )
 
 :: Install / upgrade PyInstaller
-echo [1/5] Checking PyInstaller...
+echo [1/4] Checking PyInstaller...
 %PIP% show pyinstaller >nul 2>&1
 if errorlevel 1 (
     echo       Installing PyInstaller...
@@ -35,15 +35,9 @@ if errorlevel 1 (
     echo       PyInstaller OK.
 )
 
-:: Download bundled Redis
-echo.
-echo [2/5] Downloading Redis server (bundled, no install needed by end users)...
-%PYTHON% download_redis.py
-if errorlevel 1 ( echo ERROR: Redis download failed. & pause & exit /b 1 )
-
 :: Generate icon
 echo.
-echo [3/5] Generating icon...
+echo [2/4] Generating icon...
 %PYTHON% build_icon.py
 if errorlevel 1 ( echo ERROR: Icon generation failed. & pause & exit /b 1 )
 
@@ -52,11 +46,11 @@ echo.
 if exist "dist\Conductor\Conductor.exe" (
     echo %* | find /i "--rebuild" >nul
     if errorlevel 1 (
-        echo [4/5] Executable already built — skipping. Pass --rebuild to force.
+        echo [3/4] Executable already built — skipping. Pass --rebuild to force.
         goto :inno
     )
 )
-echo [4/5] Building executable (this takes a minute)...
+echo [3/4] Building executable (this takes a minute)...
 %PYINSTALLER% conductor.spec --clean --noconfirm
 if errorlevel 1 ( echo ERROR: PyInstaller build failed. & pause & exit /b 1 )
 echo       Executable built: dist\Conductor\Conductor.exe
@@ -64,7 +58,7 @@ echo       Executable built: dist\Conductor\Conductor.exe
 
 :: Run Inno Setup via Python (avoids batch syntax issues with spaces in paths)
 echo.
-echo [5/5] Building installer...
+echo [4/4] Building installer...
 %PYTHON% run_inno.py
 if errorlevel 2 ( pause & exit /b 0 )
 if errorlevel 1 ( echo ERROR: Inno Setup build failed. & pause & exit /b 1 )
