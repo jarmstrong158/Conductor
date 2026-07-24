@@ -1,10 +1,13 @@
 """
 conftest.py — pytest fixtures for Conductor tests.
 
-Heavy external dependencies (redis, pystray, PIL, tzlocal) are stubbed via
-sys.modules BEFORE app.py is imported, because app.py runs create_app() at
-module level.  socket.create_connection is patched so _redis_running() returns
-True during that startup sequence, preventing any real Redis connection attempt.
+app.py no longer calls create_app() at import time, so importing it is now a
+side-effect-free operation: no scheduler, no threads, no network, no Redis.
+Redis is gone from the product entirely.
+
+pystray/PIL are still stubbed because they are optional GUI deps that may not
+be installed in CI; tzlocal is stubbed to a fixed UTC zone so scheduler
+assertions are deterministic regardless of the host timezone.
 """
 
 import sys
@@ -14,10 +17,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
-# 1. Stub optional / heavy modules before app.py is ever imported
+# 1. Stub optional GUI deps that may not be installed in CI
 # ---------------------------------------------------------------------------
-for _mod in ("redis", "pystray"):
-    sys.modules.setdefault(_mod, MagicMock())
+sys.modules.setdefault("pystray", MagicMock())
 
 # tzlocal must return a real tzinfo so APScheduler accepts it
 _tzlocal_stub = MagicMock()
@@ -29,19 +31,10 @@ for _pil in ("PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont"):
     sys.modules.setdefault(_pil, MagicMock())
 
 # ---------------------------------------------------------------------------
-# 2. Fake "Redis is already running" so create_app() skips subprocess launch
-# ---------------------------------------------------------------------------
-_sock_patcher = patch("socket.create_connection", return_value=MagicMock())
-_sock_patcher.start()
-
-# ---------------------------------------------------------------------------
-# 3. Import app AFTER stubs are in place
+# 2. Import app — safe now that create_app() is not called at import time
 # ---------------------------------------------------------------------------
 import app as _app_module          # noqa: E402
 from app import app as _flask_app  # noqa: E402
-
-# socket patch no longer needed after module load
-_sock_patcher.stop()
 
 
 # ---------------------------------------------------------------------------

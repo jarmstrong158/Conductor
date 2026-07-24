@@ -154,7 +154,35 @@ def _register_mcp():
             pass
 
 
+def _reject_script_arguments():
+    """Refuse to be used as a Python interpreter.
+
+    This is the launcher frozen as Conductor.exe. Because it ignored sys.argv,
+    `Conductor.exe some_script.py` used to print a banner, open a browser tab
+    and exit 0 — so a caller treating it as an interpreter saw a clean success
+    for a script that was never executed. Anything that looks like a script
+    argument is now a hard, visible error.
+    """
+    script_like = [
+        a for a in sys.argv[1:]
+        if not a.startswith("-") and Path(a).suffix.lower() in (".py", ".pyw", ".bat", ".cmd", ".sh")
+    ]
+    if not script_like:
+        return
+    msg = (
+        "\n  ERROR: Conductor is an application, not a Python interpreter.\n"
+        f"  It was asked to run: {', '.join(script_like)}\n\n"
+        "  Nothing was executed. If a scheduled worker produced this message,\n"
+        "  Conductor could not find a real Python on this machine — install\n"
+        "  Python 3 (https://www.python.org/downloads/) or set the\n"
+        "  CONDUCTOR_PYTHON environment variable to a python executable.\n"
+    )
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
 def main():
+    _reject_script_arguments()
     print("=" * 50)
     print("  Conductor")
     print("=" * 50)

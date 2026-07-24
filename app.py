@@ -1,6 +1,6 @@
 """
 app.py — Conductor backend
-Flask + APScheduler + SQLite + Redis
+Flask + APScheduler + SQLite
 """
 
 import os
@@ -8,6 +8,9 @@ import sys
 import ast
 import json
 import time
+import shutil
+import logging
+import logging.handlers
 import subprocess
 import threading
 import importlib.util
@@ -27,7 +30,6 @@ from flask import Flask, request, jsonify, send_from_directory
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-import redis
 
 # ---------------------------------------------------------------------------
 # Paths & config
@@ -47,8 +49,243 @@ STATIC_DIR    = BUNDLE_DIR / "static"
 ENV_PATH      = BASE_DIR   / ".env"
 TEMPLATES_DIR = BASE_DIR   / "templates" / "generated"
 
-VERSION = "4.0.0"
+try:
+    from _version import __version__ as VERSION
+except ImportError:  # pragma: no cover - frozen bundles without the module
+    VERSION = "0.0.0+unknown"
 GITHUB_REPO = "jarmstrong158/conductor"
+
+LOG_DIR  = BASE_DIR / "logs"
+LOG_FILE = LOG_DIR / "conductor.log"
+
+# Auto-installing packages scraped out of a traceback means running
+# `pip install <name-from-stderr>` unattended. That is a typosquat vector:
+# a typo'd import in a user script becomes an unpinned install of whatever
+# happens to own that name on PyPI. Off unless explicitly enabled.
+AUTO_PIP_INSTALL = os.environ.get("CONDUCTOR_AUTO_PIP_INSTALL", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logger = logging.getLogger("conductor")
+_LOGGING_CONFIGURED = False
+
+
+def setup_logging(level: int = logging.INFO) -> logging.Logger:
+    """Attach a rotating file handler + console handler to the app logger.
+
+    Also attaches APScheduler's logger, which otherwise has no handler at all:
+    job exceptions, misfires and "maximum number of running instances reached"
+    were being swallowed entirely.
+    """
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        return logger
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    handlers = []
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        fh = logging.handlers.RotatingFileHandler(
+            str(LOG_FILE), maxBytes=2_000_000, backupCount=5, encoding="utf-8",
+        )
+        fh.setFormatter(fmt)
+        handlers.append(fh)
+    except Exception:
+        # A read-only install dir must not stop the app from starting.
+        pass
+
+    # Frozen windowed builds have no usable stderr.
+    if sys.stderr is not None:
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setFormatter(fmt)
+        handlers.append(sh)
+
+    logger.setLevel(level)
+    logger.propagate = False
+    for h in handlers:
+        logger.addHandler(h)
+
+    # APScheduler logs job errors/misfires here. Give it somewhere to go.
+    for name in ("apscheduler", "apscheduler.scheduler", "apscheduler.executors.default"):
+        ap = logging.getLogger(name)
+        ap.setLevel(logging.INFO)
+        ap.propagate = False
+        for h in handlers:
+            ap.addHandler(h)
+
+    _LOGGING_CONFIGURED = True
+    logger.info("Logging initialised — %s (Conductor %s)", LOG_FILE, VERSION)
+    return logger
+
+
+# ---------------------------------------------------------------------------
+# Python interpreter resolution
+# ---------------------------------------------------------------------------
+class InterpreterNotFound(RuntimeError):
+    """No real Python interpreter could be located to run a user script."""
+
+
+_RESOLVED_PYTHON = None
+
+
+def _looks_like_conductor(path: str) -> bool:
+    """True if `path` is the Conductor binary itself rather than a Python."""
+    if not path:
+        return True
+    stem = Path(path).stem.lower()
+    return "conductor" in stem
+
+
+def _probe_python(candidate) -> str:
+    """Return the candidate if it is a working, non-Conductor Python, else ''."""
+    if not candidate:
+        return ""
+    cand = [candidate] if isinstance(candidate, str) else list(candidate)
+    if _looks_like_conductor(cand[0]):
+        return ""
+    try:
+        r = subprocess.run(
+            cand + ["-c", "import sys; print(sys.executable)"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0,
+        )
+    except Exception:
+        return ""
+    if r.returncode != 0:
+        return ""
+    found = (r.stdout or "").strip().splitlines()
+    exe = found[-1].strip() if found else ""
+    if not exe or _looks_like_conductor(exe):
+        return ""
+    return exe
+
+
+def _resolve_python(force: bool = False) -> str:
+    """Return the path to a REAL Python interpreter for running user scripts.
+
+    When frozen by PyInstaller, `sys.executable` is Conductor.exe — NOT a
+    Python. Handing a .py file to it re-enters launch.py, which ignores argv
+    entirely: if Conductor is already up it prints a banner, opens a browser
+    tab and exits 0, so the caller sees a clean success for a script that
+    never ran. Otherwise it boots a second Conductor. Either way the user's
+    work is silently skipped.
+
+    Raises InterpreterNotFound rather than ever returning the Conductor
+    binary. Failing loudly is the entire point.
+    """
+    global _RESOLVED_PYTHON
+    if _RESOLVED_PYTHON and not force:
+        return _RESOLVED_PYTHON
+
+    frozen = bool(getattr(sys, "frozen", False))
+    tried = []
+
+    candidates = []
+    if not frozen:
+        # Running from source: our own interpreter is the right answer.
+        candidates.append(sys.executable)
+    else:
+        # A python shipped next to / inside the bundle, if the build provides one.
+        exe_name = "python.exe" if sys.platform == "win32" else "python3"
+        for root in {BASE_DIR, BUNDLE_DIR}:
+            candidates.append(str(Path(root) / exe_name))
+            candidates.append(str(Path(root) / "python" / exe_name))
+
+    # An explicit override always wins.
+    override = os.environ.get("CONDUCTOR_PYTHON", "").strip()
+    if override:
+        candidates.insert(0, override)
+
+    if sys.platform == "win32":
+        candidates.append(["py", "-3"])
+    for name in ("python3", "python"):
+        which = shutil.which(name)
+        if which:
+            candidates.append(which)
+
+    for cand in candidates:
+        label = cand if isinstance(cand, str) else " ".join(cand)
+        if not label:
+            continue
+        tried.append(label)
+        exe = _probe_python(cand)
+        if exe:
+            _RESOLVED_PYTHON = exe
+            logger.info("Resolved Python interpreter: %s", exe)
+            return exe
+
+    if sys.platform == "win32":
+        exe = _probe_python_from_registry()
+        if exe:
+            _RESOLVED_PYTHON = exe
+            logger.info("Resolved Python interpreter from registry: %s", exe)
+            return exe
+        tried.append("winreg")
+
+    msg = (
+        "No Python interpreter could be found to run this script.\n"
+        f"Tried: {', '.join(t for t in tried if t) or '(nothing)'}\n\n"
+        "Install Python 3 from https://www.python.org/downloads/ and make sure "
+        "it is on your PATH, or set the CONDUCTOR_PYTHON environment variable "
+        "to the full path of a python executable."
+    )
+    logger.error(msg)
+    raise InterpreterNotFound(msg)
+
+
+def _probe_python_from_registry() -> str:
+    """Last resort on Windows: read installed Pythons out of the registry."""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for subkey in (r"SOFTWARE\Python\PythonCore", r"SOFTWARE\WOW6432Node\Python\PythonCore"):
+            try:
+                with winreg.OpenKey(root, subkey) as k:
+                    versions = []
+                    i = 0
+                    while True:
+                        try:
+                            versions.append(winreg.EnumKey(k, i)); i += 1
+                        except OSError:
+                            break
+            except OSError:
+                continue
+            for ver in sorted(versions, reverse=True):
+                try:
+                    with winreg.OpenKey(root, rf"{subkey}\{ver}\InstallPath") as ik:
+                        install = winreg.QueryValueEx(ik, "")[0]
+                except OSError:
+                    continue
+                exe = _probe_python(str(Path(install) / "python.exe"))
+                if exe:
+                    return exe
+    return ""
+
+
+def _assert_not_self(cmd: list):
+    """Refuse to execute a command that resolved to the Conductor binary.
+
+    Belt-and-braces behind _resolve_python(): if anything ever puts the
+    Conductor executable back at argv[0] of a worker command, that is an
+    ERROR, never a silent success.
+    """
+    if cmd and _looks_like_conductor(str(cmd[0])):
+        raise InterpreterNotFound(
+            f"Refusing to run {cmd[0]!r} — that is the Conductor application, "
+            "not a Python interpreter. The script would not have run and this "
+            "would have been reported as a success. "
+            "Set CONDUCTOR_PYTHON to a real python executable."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Dependency management
@@ -109,17 +346,32 @@ def _get_missing_modules(script_path: str) -> list:
 
     return missing
 
-def _pip_install(packages: list, context: str = "") -> bool:
-    """Install packages via pip. Logs result. Returns True on success."""
+def _pip_install(packages: list, context: str = "", scraped: bool = False) -> bool:
+    """Install packages via pip. Logs result. Returns True on success.
+
+    `scraped=True` means the package name came from parsing a traceback rather
+    than from the user. That path is an unattended, unpinned
+    `pip install <name>` — a typosquat-by-typo vector — so it is gated behind
+    CONDUCTOR_AUTO_PIP_INSTALL and off by default.
+    """
     if not packages:
         return True
     pkg_list = ", ".join(packages)
+    if scraped and not AUTO_PIP_INSTALL:
+        msg = (
+            f"Auto-install of '{pkg_list}' (detected from a traceback) is disabled. "
+            f"Add it to the worker's 'requirements' field, or set "
+            f"CONDUCTOR_AUTO_PIP_INSTALL=1 to allow automatic installs."
+        )
+        add_log("INFO", msg)
+        logger.info(msg)
+        return False
     add_log("INFO", f"Auto-installing: {pkg_list}{' for ' + context if context else ''}")
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet"] + packages,
-            capture_output=True, text=True,
-        )
+        python = _resolve_python()
+        cmd = [python, "-m", "pip", "install", "--quiet"] + packages
+        _assert_not_self(cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             add_log("OK", f"Installed: {pkg_list}")
             return True
@@ -478,90 +730,31 @@ def add_log(level: str, message: str):
         LOG_BUFFER.append(entry)
 
 # ---------------------------------------------------------------------------
-# Redis management
-# ---------------------------------------------------------------------------
-_redis_proc = None
-_redis_client = None
-
-def _redis_running() -> bool:
-    try:
-        s = socket.create_connection(("127.0.0.1", 6379), timeout=1)
-        s.close()
-        return True
-    except OSError:
-        return False
-
-def start_redis() -> dict:
-    """
-    Try to connect to a running Redis. If not found, attempt to start redis-server.
-    Returns {"ok": bool, "message": str}.
-    """
-    global _redis_proc, _redis_client
-
-    if _redis_running():
-        add_log("INFO", "Redis already running on port 6379.")
-        _redis_client = redis.Redis(host="127.0.0.1", port=6379, decode_responses=True)
-        return {"ok": True, "message": "Redis already running."}
-
-    # Determine binary — prefer bundled copy, fall back to PATH
-    binary_name = "redis-server.exe" if sys.platform == "win32" else "redis-server"
-    bundled = BUNDLE_DIR / "redis_bundled" / binary_name
-    if bundled.exists():
-        binary = str(bundled)
-        add_log("INFO", "Using bundled redis-server.")
-    else:
-        import shutil
-        binary = shutil.which(binary_name)
-        if not binary:
-            msg = (
-                f"redis-server not found.\n\n"
-                f"Install Redis:\n"
-                f"  Windows : https://github.com/tporadowski/redis/releases\n"
-                f"            or: winget install Redis.Redis\n"
-                f"  macOS   : brew install redis\n"
-                f"  Ubuntu  : sudo apt install redis-server\n\n"
-                f"After installing, ensure '{binary_name}' is on your system PATH, then restart."
-            )
-            add_log("ERROR", msg)
-            return {"ok": False, "message": msg}
-
-    try:
-        _redis_proc = subprocess.Popen(
-            [binary],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        # Wait up to 3 seconds for Redis to come up
-        import time
-        for _ in range(30):
-            if _redis_running():
-                break
-            time.sleep(0.1)
-        else:
-            return {"ok": False, "message": "redis-server started but not responding on port 6379."}
-
-        _redis_client = redis.Redis(host="127.0.0.1", port=6379, decode_responses=True)
-        add_log("INFO", f"redis-server started (pid={_redis_proc.pid}).")
-        return {"ok": True, "message": f"Redis started (pid={_redis_proc.pid})."}
-    except Exception as e:
-        return {"ok": False, "message": f"Failed to start Redis: {e}"}
-
-def stop_redis():
-    global _redis_proc
-    if _redis_proc and _redis_proc.poll() is None:
-        try:
-            _redis_proc.terminate()
-            _redis_proc.wait(timeout=5)
-            add_log("INFO", "redis-server stopped.")
-        except Exception:
-            _redis_proc.kill()
-
-# ---------------------------------------------------------------------------
 # SQLite schema
 # ---------------------------------------------------------------------------
+_WAL_INITIALISED = set()
+
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
+    """Open a SQLite connection tuned for concurrent access.
+
+    Conductor hits this DB from three separate thread pools (the threaded
+    Werkzeug server, APScheduler's 10-worker executor, and ad-hoc
+    threading.Thread calls). The default journal mode serialises readers
+    against a writer and the default busy timeout is 0, so a concurrent
+    write raised "database is locked" immediately. WAL + a busy timeout
+    fixes both.
+    """
+    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    key = str(DB_PATH)
+    if key not in _WAL_INITIALISED:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            _WAL_INITIALISED.add(key)
+        except sqlite3.Error as e:
+            logger.warning("Could not enable WAL on %s: %s", key, e)
     return conn
 
 def init_db():
@@ -757,11 +950,13 @@ def _run_script(task_path: str, output_dir: str = "",
     """Run a script file as a subprocess and return the result."""
     ext = Path(task_path).suffix.lower()
     if ext == ".py":
-        cmd = [sys.executable, task_path]
+        # NOT sys.executable — under PyInstaller that is Conductor.exe.
+        cmd = [_resolve_python(), task_path]
     elif ext in (".bat", ".sh", ".cmd"):
         cmd = [task_path]
     else:
         raise ValueError(f"Unsupported file type: {ext}")
+    _assert_not_self(cmd)
     cwd = output_dir or os.path.dirname(task_path) or str(BASE_DIR)
     timeout_secs = timeout_minutes * 60 if timeout_minutes and timeout_minutes > 0 else None
     env = {**os.environ, **_parse_env_vars(env_vars)} if env_vars.strip() else None
@@ -801,7 +996,8 @@ def _task_runner(worker_id: int, task_path: str, output_dir: str,
             stderr = result.stderr.strip()
             if "ModuleNotFoundError" in stderr or "No module named" in stderr:
                 missing = _extract_missing_module(stderr)
-                if missing and _pip_install([missing], context=f"Worker #{worker_id}"):
+                if missing and _pip_install([missing], context=f"Worker #{worker_id}",
+                                            scraped=True):
                     add_log("INFO", f"Worker #{worker_id} — retrying after install...")
                     result = _run_script(task_path, output_dir, new_console=new_console,
                                         timeout_minutes=timeout_minutes, env_vars=env_vars)
@@ -842,7 +1038,9 @@ def _task_runner(worker_id: int, task_path: str, output_dir: str,
                                 f"[Conductor] {status_icon} \"{w['name']}\" {status_word}",
                                 body)
         except Exception:
-            pass  # never crash on notification failure
+            # Never crash the run on notification failure — but never hide it either.
+            logger.exception("Worker #%s notification failed", worker_id)
+            add_log("ERROR", f"Worker #{worker_id} notification failed: {traceback.format_exc(limit=1).strip()}")
 
 def register_worker_jobs(worker_id: int, task_path: str, sched_type: str,
                          sched_value: str, output_dir: str, paused: bool = False,
@@ -916,12 +1114,16 @@ def _run_one_chain_step(chain_name: str, step_label: str, task_path: str):
     t0 = time.time()
     ext = Path(task_path).suffix.lower()
     if ext == ".py":
-        result = subprocess.run([sys.executable, task_path], capture_output=True, text=True)
+        # NOT sys.executable — under PyInstaller that is Conductor.exe.
+        cmd = [_resolve_python(), task_path]
+        _assert_not_self(cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0 and "ModuleNotFoundError" in result.stderr:
             missing = _extract_missing_module(result.stderr)
-            if missing and _pip_install([missing], context=f"Chain '{chain_name}' {step_label}"):
+            if missing and _pip_install([missing], context=f"Chain '{chain_name}' {step_label}",
+                                        scraped=True):
                 add_log("INFO", f"Chain '{chain_name}' — {step_label} retrying after install...")
-                result = subprocess.run([sys.executable, task_path], capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True)
     elif ext in (".bat", ".sh", ".cmd"):
         result = subprocess.run([task_path], capture_output=True, text=True)
     else:
@@ -1023,7 +1225,9 @@ def _chain_runner(chain_id: int, trigger_type: str = "scheduled"):
                             f"[Conductor] {status_icon} \"{name}\" {status_word}",
                             body)
     except Exception:
-        pass
+        # Never crash the chain on notification failure — but never hide it either.
+        logger.exception("Chain #%s notification failed", chain_id)
+        add_log("ERROR", f"Chain #{chain_id} notification failed: {traceback.format_exc(limit=1).strip()}")
 
 def register_chain_jobs(chain_id: int, sched_type: str, sched_value: str,
                         paused: bool = False):
@@ -1091,11 +1295,28 @@ def browse_file():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- Redis status ---
+# --- Service status ---
+@app.route("/api/status", methods=["GET"])
+def conductor_status():
+    """Report real backing-service health. All state lives in SQLite."""
+    sched_ok = bool(scheduler and getattr(scheduler, "running", False))
+    return jsonify({
+        "running": sched_ok,
+        "scheduler": sched_ok,
+        "database": str(DB_PATH),
+        "version": VERSION,
+    })
+
 @app.route("/api/redis-status", methods=["GET"])
 def redis_status():
-    ok = _redis_running()
-    return jsonify({"running": ok})
+    """Deprecated. Conductor no longer uses Redis; kept so older MCP clients
+    and dashboards do not hard-fail. Reports scheduler health instead."""
+    sched_ok = bool(scheduler and getattr(scheduler, "running", False))
+    return jsonify({
+        "running": sched_ok,
+        "deprecated": True,
+        "note": "Conductor no longer uses Redis. Use /api/status.",
+    })
 
 # --- Workers ---
 @app.route("/api/workers", methods=["GET"])
@@ -1179,6 +1400,18 @@ def add_workers():
         if output_dir and not os.path.isabs(output_dir):
             output_dir = os.path.abspath(output_dir)
 
+        # Validate the schedule BEFORE writing anything. _make_triggers raises
+        # on malformed input (e.g. sched_type=fixed, sched_value=banana); doing
+        # this after the commit left a committed row with no jobs attached —
+        # a permanently orphaned worker plus a 500.
+        try:
+            _make_triggers(sched_type, sched_value)
+        except Exception as e:
+            errors.append(f"Worker '{name}': invalid schedule {sched_type}='{sched_value}' ({e})")
+            logger.warning("Rejected worker '%s': bad schedule %s=%r (%s)",
+                           name, sched_type, sched_value, e)
+            continue
+
         with get_db() as conn:
             cur = conn.execute(
                 "INSERT INTO workers (name, task_path, sched_type, sched_value, output_dir, requirements, new_console, timeout_minutes, env_vars, notify_email, notify_on) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -1187,10 +1420,24 @@ def add_workers():
             worker_id = cur.lastrowid
             conn.commit()
 
-        _install_for_worker(name, task_path, requirements)
-        register_worker_jobs(worker_id, task_path, sched_type, sched_value, output_dir,
-                             new_console=new_console, timeout_minutes=timeout_minutes,
-                             env_vars=env_vars)
+        try:
+            _install_for_worker(name, task_path, requirements)
+            register_worker_jobs(worker_id, task_path, sched_type, sched_value, output_dir,
+                                 new_console=new_console, timeout_minutes=timeout_minutes,
+                                 env_vars=env_vars)
+        except Exception as e:
+            # Registration failed after the row landed — roll the row back so we
+            # never leave a worker that exists in the DB but can never fire.
+            logger.exception("Registering worker '%s' (id=%s) failed; rolling back", name, worker_id)
+            try:
+                with get_db() as conn:
+                    conn.execute("DELETE FROM workers WHERE id=?", (worker_id,))
+                    conn.commit()
+            except Exception:
+                logger.exception("Rollback of worker id=%s failed", worker_id)
+            errors.append(f"Worker '{name}': could not be scheduled ({e})")
+            continue
+
         add_log("INFO", f"Worker '{name}' registered (id={worker_id}).")
         added.append(worker_id)
 
@@ -1967,10 +2214,15 @@ _REG_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _REG_VALUE_NAME = "Conductor"
 
 def _get_reg_command() -> str:
-    """Build the auto-start command string."""
-    python_exe = sys.executable
+    """Build the auto-start command string.
+
+    When frozen, the executable IS the launcher — appending launch.py would
+    pass an argument that launch.py ignores anyway.
+    """
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
     launch_py = str(BASE_DIR / "launch.py")
-    return f'"{python_exe}" "{launch_py}"'
+    return f'"{sys.executable}" "{launch_py}"'
 
 @app.route("/api/service/status", methods=["GET"])
 def service_status():
@@ -2098,24 +2350,52 @@ def restore_chains():
         except Exception as e:
             add_log("ERROR", f"Failed to restore chain '{r['name']}': {e}")
 
-def create_app():
+def create_app(start_scheduler: bool = True, check_updates: bool = True):
+    """Build and start the application.
+
+    NOTE: this is deliberately NOT called at import time. It used to be, which
+    meant importing app.py started a scheduler, spawned threads and hit the
+    network — forcing every test to stub half the world before the import
+    statement. Callers (launch.py, __main__) call it explicitly.
+    """
     global scheduler
+    setup_logging()
     _load_dotenv()
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
-    redis_result = start_redis()
-    if not redis_result["ok"]:
-        add_log("ERROR", redis_result["message"])
-    scheduler = BackgroundScheduler(timezone=_get_local_tz())
-    scheduler.start()
-    restore_workers()
-    restore_chains()
-    atexit.register(lambda: scheduler.shutdown(wait=False))
-    atexit.register(stop_redis)
-    threading.Thread(target=_check_for_update, daemon=True).start()
+    if start_scheduler:
+        scheduler = BackgroundScheduler(timezone=_get_local_tz())
+        scheduler.start()
+        restore_workers()
+        restore_chains()
+        atexit.register(lambda: scheduler.shutdown(wait=False))
+    if check_updates:
+        threading.Thread(target=_check_for_update, daemon=True).start()
     return app
 
-application = create_app()
+
+_application = None
+
+
+def _get_application():
+    """Lazily build the app for WSGI servers that expect a module attribute."""
+    global _application
+    if _application is None:
+        _application = create_app()
+    return _application
+
+
+def __getattr__(name):
+    # PEP 562: `from app import application` still works, but only builds the
+    # app when something actually asks for it.
+    if name == "application":
+        return _get_application()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# `scheduler` must exist before create_app() runs so /api/status can report
+# honestly (and so tests can swap it) without tripping NameError.
+
 
 if __name__ == "__main__":
-    application.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    _get_application().run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
