@@ -5,6 +5,7 @@ Exposes Conductor's REST API as MCP tools for Claude.
 Run alongside Conductor: python server.py
 """
 
+import functools
 import json
 import os
 import socket
@@ -15,6 +16,12 @@ import time
 import urllib.request
 import urllib.error
 from typing import Any
+
+import anyio
+import mcp_types as types
+from mcp.server.caching import CacheHint
+from mcp.server.lowlevel.server import Server
+from mcp.server.stdio import stdio_server
 
 try:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -418,47 +425,58 @@ def handle_tool(name: str, args: dict) -> str:
     else:
         return json.dumps({"error": f"Unknown tool: {name}"})
 
+# --- MCP transport (protocol revision 2026-07-28, SDK mcp>=2.0,<3) ---
+#
+# This was a hand-rolled line-delimited JSON-RPC loop advertising protocol
+# version 2024-11-05. The 2026-07-28 revision drops the initialize handshake
+# and requires server/discover, per-request version negotiation, resultType on
+# every result, and ttlMs/cacheScope on cacheable results. The loop is now the
+# SDK's. The low-level Server is used rather than MCPServer's decorators so the
+# hand-written TOOLS schemas pass through verbatim instead of being re-derived
+# from function signatures.
+
+
+async def _on_list_tools(_ctx, _params) -> types.ListToolsResult:
+    return types.ListToolsResult(tools=[types.Tool.model_validate(t) for t in TOOLS])
+
+
+async def _on_call_tool(_ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+    """Dispatch to handle_tool, which returns an already-serialized JSON string.
+
+    Note this server has never set isError - even "Unknown tool" came back as a
+    successful result - and that is preserved here rather than quietly changed
+    as a side effect of the transport migration.
+    """
+    # handle_tool does blocking HTTP against the local Conductor API, so it runs
+    # on a worker thread rather than stalling the event loop.
+    text = await anyio.to_thread.run_sync(
+        functools.partial(handle_tool, params.name, params.arguments or {})
+    )
+    return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=False)
+
+
+# The tool list is static code, identical for every caller with no auth-scoped
+# variation. Tool results are caller-specific, but tools/call is not cacheable.
+server = Server(
+    "conductor-mcp",
+    version=VERSION,
+    cache_hints={
+        "tools/list": CacheHint(ttl_ms=300_000, scope="public"),
+        "server/discover": CacheHint(ttl_ms=300_000, scope="public"),
+    },
+    on_list_tools=_on_list_tools,
+    on_call_tool=_on_call_tool,
+)
+
+
+async def _serve() -> None:
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
 def main():
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    anyio.run(_serve)
 
-        msg_id = msg.get("id")
-        method = msg.get("method", "")
-
-        if method == "initialize":
-            response = {
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "conductor-mcp", "version": VERSION}
-                }
-            }
-        elif method == "tools/list":
-            response = {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
-        elif method == "tools/call":
-            tool_name = msg["params"]["name"]
-            tool_args = msg["params"].get("arguments", {})
-            result = handle_tool(tool_name, tool_args)
-            response = {
-                "jsonrpc": "2.0", "id": msg_id,
-                "result": {"content": [{"type": "text", "text": result}]}
-            }
-        elif method == "notifications/initialized":
-            continue
-        else:
-            response = {
-                "jsonrpc": "2.0", "id": msg_id,
-                "error": {"code": -32601, "message": f"Method not found: {method}"}
-            }
-
-        print(json.dumps(response), flush=True)
 
 if __name__ == "__main__":
     main()

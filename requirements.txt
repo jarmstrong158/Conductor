@@ -4,3 +4,7 @@ tzlocal>=5.0
 anthropic>=0.40.0
 pystray>=0.19.0
 Pillow>=10.0.0
+
+# MCP server (server.py). SDK v2 speaks protocol revision 2026-07-28; v1
+# cannot, and v2 removed mcp.server.fastmcp, so the major is pinned.
+mcp>=2.0,<3
