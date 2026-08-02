@@ -6,12 +6,12 @@
     "url": "https://github.com/jarmstrong158/Conductor",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "4.0.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "conductor-mcpserver",
-      "version": "0.1.1",
+      "version": "4.0.0",
       "transport": {
         "type": "stdio"
       },
